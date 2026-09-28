@@ -598,11 +598,11 @@ try {
 
     # --- 3. Procesos y servicios ---------------------------------------------
     Write-Paso '3' 'Finalización de procesos y servicios de XAMPP'
-    $activos = Get-ProcesosXampp
+    $activos = @(Get-ProcesosXampp)
     if ($activos.Count -eq 0) { Write-Ok 'No hay procesos de XAMPP en ejecución.' }
     else {
         Write-Info ('Procesos de XAMPP en ejecución: {0}' -f (($activos | ForEach-Object { $_.Name }) -join ', '))
-        $restantes = Stop-ProcesosXampp
+        $restantes = @(Stop-ProcesosXampp)
         if ($restantes.Count -gt 0) { throw ('Persisten procesos de XAMPP que no se pudieron finalizar: {0}' -f (($restantes | ForEach-Object { $_.Name }) -join ', ')) }
     }
     $serviciosPendientes = Stop-ServiciosXampp
