@@ -7,6 +7,7 @@
 | `DisableCMD = 1` | Directiva que bloquea `cmd.exe` y `.bat`. | Use la versión PowerShell; si ambas están bloqueadas, se requiere el administrador del equipo. |
 | `El puerto 3307 ya está en uso` | Otra instancia de MariaDB/MySQL. | Identifique el PID con `Get-NetTCPConnection -LocalPort 3307` y finalice ese proceso si es suyo. |
 | Apache no inicia: puerto 80/443 ocupado (PID 4, `System`) | `http.sys`/IIS u otro servicio de Windows. | Detener servicios exige administrador. Alternativa: cambiar `Listen` en `httpd.conf` (queda fuera del alcance de las fases 5.3 a 5.5). |
+| `InnoDB: Failing assertion: slot` en `os0file.cc` al iniciar | Fallo de E/S asíncrona de InnoDB en Windows (causa exacta no confirmada; posible incompatibilidad de versión de MariaDB con la versión de Windows). | Ejecute `mysqld --version`, revise el inicio de `mysql_error.log` y pruebe `Repair-Xampp.ps1 -NoNativeAio`. |
 | `mysqld` inicia y se cierra; error de InnoDB/Aria en `mysql_error.log` | `data.zip` proviene de otra versión de MariaDB que la de su XAMPP. | Use un `data.zip` generado con la misma línea de versión de MariaDB de su XAMPP, o ejecute la actualización de tablas del sistema de su versión. |
 | `mysql` no se reconoce | La terminal se abrió antes del cambio de `PATH`. | Cierre y abra una terminal nueva. |
 | Se ejecuta otro `mysql.exe` | Otra instalación de MySQL/MariaDB antecede en el `PATH` (el `PATH` del sistema precede al del usuario). | Ejecute `where mysql` y use la ruta completa `C:\xampp\mysql\bin\mysql.exe`. |

@@ -35,6 +35,10 @@
 .PARAMETER SkipApache
     Omite el diagnóstico y la prueba de arranque de Apache.
 
+.PARAMETER NoNativeAio
+    Inicia mysqld con --innodb-use-native-aio=0 (solo en la línea de comandos, sin
+    modificar my.ini). Sirve para diagnosticar fallos de E/S asíncrona de InnoDB.
+
 .PARAMETER StopMySql
     Detiene MySQL al finalizar (por defecto queda en ejecución para que pueda
     probar manualmente el comando mysql).
@@ -53,7 +57,8 @@ param(
     [switch]$NoBackup,
     [switch]$AllowDuplicates,
     [switch]$SkipApache,
-    [switch]$StopMySql
+    [switch]$StopMySql,
+    [switch]$NoNativeAio
 )
 
 Set-StrictMode -Version 2.0
@@ -169,6 +174,15 @@ function Wait-Puerto {
         Start-Sleep -Milliseconds 500
     }
     return $false
+}
+
+function Show-PrimerasLineas {
+    param([string]$Archivo, [int]$Cantidad = 12)
+    if (Test-Path -LiteralPath $Archivo) {
+        Write-Info ('Primeras líneas de {0}:' -f $Archivo)
+        Get-Content -LiteralPath $Archivo -TotalCount $Cantidad -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host ('      ' + $_) -ForegroundColor DarkGray }
+    }
 }
 
 function Invoke-Nativo {
@@ -480,13 +494,23 @@ function Test-AccesoMySql {
     }
 
     Write-Info 'Iniciando mysqld con C:\xampp\mysql\bin\my.ini...'
+    $argumentos = @(('--defaults-file=' + (Join-Path $bin 'my.ini')), '--standalone')
+    if ($NoNativeAio) {
+        $argumentos += '--innodb-use-native-aio=0'
+        Write-Aviso 'Modo diagnóstico: se inicia con --innodb-use-native-aio=0 (my.ini no se modifica).'
+    }
     $proceso = Start-Process -FilePath (Join-Path $bin 'mysqld.exe') `
-        -ArgumentList @(('--defaults-file=' + (Join-Path $bin 'my.ini')), '--standalone') `
+        -ArgumentList $argumentos `
         -WorkingDirectory $bin -WindowStyle Hidden -PassThru
     $script:MySqlIniciadoPorScript = $true
 
     if (-not (Wait-Puerto -Puerto $puerto -Segundos 45 -Proceso $proceso)) {
-        Show-UltimasLineas -Archivo (Join-Path $script:RaizXampp 'mysql\data\mysql_error.log')
+        $version = Invoke-Nativo -Exe (Join-Path $bin 'mysqld.exe') -Argumentos @('--version')
+        Write-Info ('Versión del servidor: {0}' -f $version.Salida)
+        $logMysql = Join-Path $script:RaizXampp 'mysql\data\mysql_error.log'
+        Show-PrimerasLineas -Archivo $logMysql
+        Show-UltimasLineas  -Archivo $logMysql
+        [void](Stop-ProcesosXampp -Silencioso)
         throw ('mysqld no quedó escuchando en el puerto {0}.' -f $puerto)
     }
     Write-Ok ('mysqld escucha en el puerto {0}.' -f $puerto)

@@ -128,6 +128,7 @@ Opciones:
 | `-AllowDuplicates` | `/ALLOWDUP` | Continúa aunque existan otras instalaciones de XAMPP |
 | `-SkipApache` | `/SKIPAPACHE` | Omite la prueba de Apache |
 | `-StopMySql` | `/STOPMYSQL` | Detiene MySQL al finalizar |
+| `-NoNativeAio` | — | Diagnóstico: inicia `mysqld` con `--innodb-use-native-aio=0` sin tocar `my.ini` |
 
 Verificación manual final (**en una terminal nueva**, para que lea el `PATH` actualizado). Al pedir la contraseña, presione **Enter**:
 
