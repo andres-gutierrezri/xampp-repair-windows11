@@ -4,7 +4,8 @@ rem  repair-xampp.bat
 rem  Repara XAMPP (Apache y MySQL/MariaDB) en Windows 11 desde una cuenta
 rem  local SIN privilegios de administrador.
 rem
-rem  Uso:    src\repair-xampp.bat [/NOBACKUP] [/ALLOWDUP] [/SKIPAPACHE] [/STOPMYSQL]
+rem  Uso:    src\repair-xampp.bat [/NOBACKUP] [/ALLOWDUP] [/SKIPAPACHE] [/STOPSERVICES]
+rem                              [/NOAIO] [/PERSISTAIO] [/NOSHELL]
 rem  Autor:  Ingeniero Andres Felipe Gutierrez Rivera
 rem  Version: 1.0.0  -  Licencia MIT
 rem
@@ -25,7 +26,10 @@ set "DUPS=0"
 set "NOBACKUP="
 set "ALLOWDUP="
 set "SKIPAPACHE="
-set "STOPMYSQL="
+set "STOPSERVICES="
+set "NOAIO="
+set "PERSISTAIO="
+set "NOSHELL="
 
 rem --- Rutas del proyecto (este archivo esta en <proyecto>\src) --------------
 for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
@@ -37,7 +41,10 @@ if "%~1"=="" goto parsed
 if /i "%~1"=="/NOBACKUP"   set "NOBACKUP=1"
 if /i "%~1"=="/ALLOWDUP"   set "ALLOWDUP=1"
 if /i "%~1"=="/SKIPAPACHE" set "SKIPAPACHE=1"
-if /i "%~1"=="/STOPMYSQL"  set "STOPMYSQL=1"
+if /i "%~1"=="/STOPSERVICES" set "STOPSERVICES=1"
+if /i "%~1"=="/NOAIO"       set "NOAIO=1"
+if /i "%~1"=="/PERSISTAIO"  set "PERSISTAIO=1"
+if /i "%~1"=="/NOSHELL"     set "NOSHELL=1"
 shift
 goto parse
 :parsed
@@ -208,18 +215,21 @@ call :addpath
 set "PATH=%PATH%;%XAMPP%\mysql\bin"
 
 rem ==========================================================================
-rem  5.7 Verificar el acceso a MySQL
+rem  5.7 Iniciar MySQL y Apache, y verificar el acceso a MySQL
 rem ==========================================================================
 echo.
-echo [5.7] Verificacion de acceso a MySQL ^(puerto %MYSQL_PORT%^)
+echo [5.7] Inicio de servicios de XAMPP y verificacion de MySQL ^(puerto %MYSQL_PORT%^)
 netstat -ano | findstr /R /C:":%MYSQL_PORT% .*LISTENING" >nul
 if not errorlevel 1 (
     echo    [ERROR] El puerto %MYSQL_PORT% ya esta en uso. Liberelo y repita el proceso.
     netstat -ano | findstr /R /C:":%MYSQL_PORT% .*LISTENING"
     goto fin_error
 )
-echo    Iniciando mysqld con %XAMPP%\mysql\bin\my.ini...
-start "" /B "%XAMPP%\mysql\bin\mysqld.exe" --defaults-file="%XAMPP%\mysql\bin\my.ini" --standalone >nul 2>&1
+set "AIOARG="
+if defined NOAIO set "AIOARG=--innodb-use-native-aio=0"
+if defined NOAIO echo    [AVISO] Modo diagnostico: --innodb-use-native-aio=0 ^(my.ini no se modifica^).
+echo    Iniciando MySQL ^(mysqld^) con %XAMPP%\mysql\bin\my.ini...
+start "" /B "%XAMPP%\mysql\bin\mysqld.exe" --defaults-file="%XAMPP%\mysql\bin\my.ini" --standalone %AIOARG% >nul 2>&1
 set /a N=0
 :wait_mysql
 netstat -ano | findstr /R /C:":%MYSQL_PORT% .*LISTENING" >nul
@@ -230,26 +240,25 @@ ping -n 2 127.0.0.1 >nul
 goto wait_mysql
 :mysql_fail
 echo    [ERROR] mysqld no quedo escuchando en el puerto %MYSQL_PORT%.
+"%XAMPP%\mysql\bin\mysqld.exe" --version
 if exist "%XAMPP%\mysql\data\mysql_error.log" (
-    echo    Ultimas lineas de mysql_error.log:
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%XAMPP%\mysql\data\mysql_error.log' -Tail 15 | ForEach-Object { '      ' + $_ }"
+    echo    Primeras y ultimas lineas de mysql_error.log:
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$f='%XAMPP%\mysql\data\mysql_error.log'; Get-Content -LiteralPath $f -TotalCount 12 | ForEach-Object { '      ' + $_ }; '      ...'; Get-Content -LiteralPath $f -Tail 15 | ForEach-Object { '      ' + $_ }"
 )
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$r='%XAMPP%\'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($r,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+if not defined NOAIO echo    [SUGERENCIA] Repita el proceso con /NOAIO ^(reextrae data.zip e inicia con --innodb-use-native-aio=0^).
 goto fin_error
 :mysql_up
-echo    [OK]    mysqld escucha en el puerto %MYSQL_PORT%.
-"%XAMPP%\mysql\bin\mysql.exe" -u root -h localhost -P %MYSQL_PORT% -D mysql --connect-timeout=10 -e "SELECT CURRENT_USER() AS usuario, DATABASE() AS base_datos, VERSION() AS version; SHOW DATABASES;"
-if errorlevel 1 (
-    echo    [ERROR] El cliente mysql no pudo autenticarse en el servidor.
-    goto fin_error
+echo    [OK]    MySQL iniciado y escuchando en el puerto %MYSQL_PORT%.
+if defined NOAIO if defined PERSISTAIO (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$f='%XAMPP%\mysql\bin\my.ini'; $t=[IO.File]::ReadAllText($f); if ($t -notmatch '(?im)^\s*innodb_use_native_aio') { $n=[Environment]::NewLine; $t=[regex]::Replace($t,'(?im)^\[mysqld\]\r?\n',('[mysqld]'+$n+'innodb_use_native_aio=0'+$n),1); [IO.File]::WriteAllText($f,$t,(New-Object Text.UTF8Encoding($false))); Write-Host '   [OK]    innodb_use_native_aio=0 agregado a my.ini' } else { Write-Host '   [INFO]  my.ini ya define innodb_use_native_aio' }"
 )
-echo    [OK]    Acceso a MySQL verificado ^(usuario root, sin contrasena, base de datos mysql^).
+if defined NOAIO if not defined PERSISTAIO echo    [AVISO] Para que MySQL tambien inicie desde el panel de XAMPP, repita con /NOAIO /PERSISTAIO.
 
-rem ==========================================================================
-rem  Diagnostico complementario de Apache (no modifica archivos)
-rem ==========================================================================
+rem --- Apache: se inicia y queda en ejecucion ---------------------------------
 if defined SKIPAPACHE goto after_apache
 echo.
-echo [+] Diagnostico complementario de Apache
+echo    Iniciando Apache...
 set "WEBPORT=80"
 for /f "tokens=2" %%P in ('findstr /R /B /C:"Listen [0-9]" "%XAMPP%\apache\conf\httpd.conf" 2^>nul') do set "WEBPORT=%%P"
 set "APBLOCK="
@@ -269,24 +278,44 @@ ping -n 6 127.0.0.1 >nul
 netstat -ano | findstr /R /C:":%WEBPORT% .*LISTENING" >nul
 if errorlevel 1 (
     echo    [AVISO] httpd.exe no quedo escuchando. Revise %XAMPP%\apache\logs\error.log
-) else (
-    for /f %%C in ('curl.exe -s -o nul -w "%%{http_code}" http://localhost:%WEBPORT%/') do echo    [OK]    Apache responde HTTP %%C en el puerto %WEBPORT%.
+    goto after_apache
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$r='%XAMPP%\'; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'httpd.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($r,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+for /f %%C in ('curl.exe -s -o nul -w "%%{http_code}" http://localhost:%WEBPORT%/') do echo    [OK]    Apache iniciado; responde HTTP %%C en el puerto %WEBPORT%.
 :after_apache
 
-if defined STOPMYSQL (
+rem --- Verificacion automatica (equivale a -p con contrasena vacia) -----------
+echo.
+echo    Verificacion automatica de acceso a MySQL:
+"%XAMPP%\mysql\bin\mysql.exe" -u root -h localhost -P %MYSQL_PORT% -D mysql --connect-timeout=10 -e "SELECT CURRENT_USER() AS usuario, DATABASE() AS base_datos, VERSION() AS version; SHOW DATABASES;"
+if errorlevel 1 (
+    echo    [ERROR] El cliente mysql no pudo autenticarse en el servidor.
+    goto fin_error
+)
+echo    [OK]    Acceso a MySQL verificado ^(usuario root, sin contrasena, base de datos mysql^).
+
+if defined STOPSERVICES (
     "%XAMPP%\mysql\bin\mysqladmin.exe" -u root -h 127.0.0.1 -P %MYSQL_PORT% shutdown
-    echo    [OK]    MySQL detenido de forma ordenada.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$r='%XAMPP%\'; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'httpd.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($r,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    echo    [OK]    MySQL y Apache detenidos ^(/STOPSERVICES^).
 )
 
 echo.
 echo ==== Proceso finalizado sin errores ====
 if defined BACKED echo Respaldo de lo reemplazado: %BK%
+if defined STOPSERVICES goto manual_msg
+if defined NOSHELL goto manual_msg
+echo.
+echo Abriendo el cliente con el comando indicado ^(MySQL y Apache siguen en ejecucion^):
+echo    mysql -u root -p -h localhost -P %MYSQL_PORT% -D mysql
+echo    Cuando solicite la contrasena, presione Enter ^(no tiene^). Escriba exit para salir.
+"%XAMPP%\mysql\bin\mysql.exe" -u root -p -h localhost -P %MYSQL_PORT% -D mysql
+goto done
+:manual_msg
 echo.
 echo Para la verificacion manual abra una terminal NUEVA y ejecute:
 echo    mysql -u root -p -h localhost -P %MYSQL_PORT% -D mysql
 echo    ^(cuando solicite la contrasena, presione Enter: no tiene^)
+:done
 endlocal & exit /b 0
 
 rem ==========================================================================

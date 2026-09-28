@@ -17,7 +17,8 @@
          5.4 Reemplazar C:\xampp\mysql\bin\my.ini.
          5.5 Reemplazar C:\xampp\phpMyAdmin\config.inc.php.
          5.6 Agregar C:\xampp\mysql\bin al PATH del usuario actual.
-         5.7 Verificar el acceso a MySQL (puerto 3307, usuario root sin contraseña).
+         5.7 Iniciar MySQL y Apache, y verificar el acceso a MySQL (puerto 3307,
+             usuario root sin contraseña), abriendo al final el cliente interactivo.
 
     Limitaciones deliberadas: el script NO evade directivas de grupo (GPO), AppLocker
     ni ningún control administrativo; si alguno impide la operación, lo informa.
@@ -35,13 +36,22 @@
 .PARAMETER SkipApache
     Omite el diagnóstico y la prueba de arranque de Apache.
 
-.PARAMETER NoNativeAio
-    Inicia mysqld con --innodb-use-native-aio=0 (solo en la línea de comandos, sin
-    modificar my.ini). Sirve para diagnosticar fallos de E/S asíncrona de InnoDB.
+.PARAMETER StopServices
+    Detiene MySQL y Apache al finalizar. Por defecto ambos quedan en ejecución y
+    no se abre el cliente interactivo si se usa este conmutador.
 
-.PARAMETER StopMySql
-    Detiene MySQL al finalizar (por defecto queda en ejecución para que pueda
-    probar manualmente el comando mysql).
+.PARAMETER NoNativeAio
+    Inicia mysqld directamente con --innodb-use-native-aio=0 (solo en la línea de
+    comandos, sin modificar my.ini). Si mysqld falla con la configuración normal, el
+    script lo reintenta automáticamente así tras restablecer data.zip.
+
+.PARAMETER PersistNativeAio
+    Si mysqld solo inicia con --innodb-use-native-aio=0, agrega innodb_use_native_aio=0
+    a la sección [mysqld] del my.ini instalado (cambio explícito y opcional; el panel de
+    XAMPP necesita esta línea para poder iniciar MySQL en ese caso).
+
+.PARAMETER NoShell
+    No abre al final el cliente interactivo 'mysql -u root -p -h localhost -P 3307 -D mysql'.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\src\Repair-Xampp.ps1
@@ -57,8 +67,10 @@ param(
     [switch]$NoBackup,
     [switch]$AllowDuplicates,
     [switch]$SkipApache,
-    [switch]$StopMySql,
-    [switch]$NoNativeAio
+    [switch]$StopServices,
+    [switch]$NoNativeAio,
+    [switch]$PersistNativeAio,
+    [switch]$NoShell
 )
 
 Set-StrictMode -Version 2.0
@@ -94,6 +106,7 @@ $script:PuertoMySql = 3307
 $script:Resumen     = New-Object System.Collections.Generic.List[object]
 $script:DirRespaldo = $null
 $script:MySqlIniciadoPorScript = $false
+$script:MySqlAio0 = $false
 
 # ---------------------------------------------------------------------------
 # Utilidades de salida
@@ -401,7 +414,11 @@ function Restore-CarpetaData {
                 Write-Ok 'Carpeta data anterior eliminada (sin respaldo).'
             }
             else {
-                $respaldada = Join-Path (Get-DirectorioRespaldo) 'data'
+                $nombreResp = 'data'; $n = 2
+                while (Test-Path -LiteralPath (Join-Path (Get-DirectorioRespaldo) $nombreResp)) {
+                    $nombreResp = 'data-intento{0}' -f $n; $n++
+                }
+                $respaldada = Join-Path (Get-DirectorioRespaldo) $nombreResp
                 Move-Item -LiteralPath $destino -Destination $respaldada
                 Write-Ok ('Carpeta data anterior retirada de C:\xampp y conservada en: {0}' -f $respaldada)
             }
@@ -481,11 +498,12 @@ function Add-RutaPathUsuario {
 }
 
 # ---------------------------------------------------------------------------
-# Fase 5.7: verificación de MySQL
+# Fase 5.7: inicio de servicios (MySQL y Apache) y verificación de MySQL
 # ---------------------------------------------------------------------------
-function Test-AccesoMySql {
+function Start-MySqlServicio {
     $bin = Join-Path $script:RaizXampp 'mysql\bin'
     $puerto = $script:PuertoMySql
+    $logMysql = Join-Path $script:RaizXampp 'mysql\data\mysql_error.log'
 
     $ocupado = @(Get-EscuchaPuerto -Puerto $puerto)
     if ($ocupado.Count -gt 0) {
@@ -493,56 +511,59 @@ function Test-AccesoMySql {
         throw ('El puerto {0} ya está en uso por: {1}. Libérelo antes de continuar.' -f $puerto, $detalle)
     }
 
-    Write-Info 'Iniciando mysqld con C:\xampp\mysql\bin\my.ini...'
-    $argumentos = @(('--defaults-file=' + (Join-Path $bin 'my.ini')), '--standalone')
-    if ($NoNativeAio) {
-        $argumentos += '--innodb-use-native-aio=0'
-        Write-Aviso 'Modo diagnóstico: se inicia con --innodb-use-native-aio=0 (my.ini no se modifica).'
-    }
-    $proceso = Start-Process -FilePath (Join-Path $bin 'mysqld.exe') `
-        -ArgumentList $argumentos `
-        -WorkingDirectory $bin -WindowStyle Hidden -PassThru
-    $script:MySqlIniciadoPorScript = $true
+    $usarAio0 = [bool]$NoNativeAio
+    while ($true) {
+        $argumentos = @(('--defaults-file=' + (Join-Path $bin 'my.ini')), '--standalone')
+        if ($usarAio0) {
+            $argumentos += '--innodb-use-native-aio=0'
+            Write-Aviso 'Modo diagnóstico: mysqld se inicia con --innodb-use-native-aio=0 (my.ini no se modifica).'
+        }
+        Write-Info 'Iniciando MySQL (mysqld) con C:\xampp\mysql\bin\my.ini...'
+        $proceso = Start-Process -FilePath (Join-Path $bin 'mysqld.exe') `
+            -ArgumentList $argumentos -WorkingDirectory $bin -WindowStyle Hidden -PassThru
 
-    if (-not (Wait-Puerto -Puerto $puerto -Segundos 45 -Proceso $proceso)) {
+        if (Wait-Puerto -Puerto $puerto -Segundos 45 -Proceso $proceso) {
+            $script:MySqlIniciadoPorScript = $true
+            $script:MySqlAio0 = $usarAio0
+            Write-Ok ('MySQL iniciado y escuchando en el puerto {0}.' -f $puerto)
+            return
+        }
+
         $version = Invoke-Nativo -Exe (Join-Path $bin 'mysqld.exe') -Argumentos @('--version')
-        Write-Info ('Versión del servidor: {0}' -f $version.Salida)
-        $logMysql = Join-Path $script:RaizXampp 'mysql\data\mysql_error.log'
+        Write-Aviso ('mysqld no quedó escuchando. Versión del servidor: {0}' -f $version.Salida)
         Show-PrimerasLineas -Archivo $logMysql
         Show-UltimasLineas  -Archivo $logMysql
         [void](Stop-ProcesosXampp -Silencioso)
-        throw ('mysqld no quedó escuchando en el puerto {0}.' -f $puerto)
-    }
-    Write-Ok ('mysqld escucha en el puerto {0}.' -f $puerto)
 
-    $sql = 'SELECT CURRENT_USER() AS usuario, DATABASE() AS base_datos, VERSION() AS version; SHOW DATABASES;'
-    $resultado = Invoke-Nativo -Exe (Join-Path $bin 'mysql.exe') -Argumentos @(
-        '-u', 'root', '-h', 'localhost', '-P', "$puerto", '-D', 'mysql', '--connect-timeout=10', '-e', $sql)
-    if ($resultado.Codigo -ne 0) {
-        throw ('El cliente mysql devolvió el código {0}: {1}' -f $resultado.Codigo, $resultado.Salida)
+        if ($usarAio0) {
+            throw 'mysqld no inició ni siquiera con --innodb-use-native-aio=0. Envíe el contenido de mysql_error.log para continuar el diagnóstico.'
+        }
+        Write-Aviso 'Se restablece data.zip (para descartar restos del intento fallido) y se reintenta con --innodb-use-native-aio=0...'
+        Restore-CarpetaData
+        $usarAio0 = $true
     }
-    Write-Ok 'Acceso a MySQL verificado (usuario root, sin contraseña, base de datos mysql).'
-    $resultado.Salida -split "`r?`n" | ForEach-Object { Write-Host ('      ' + $_) -ForegroundColor DarkGray }
 }
 
-function Stop-MySqlLimpio {
-    $bin = Join-Path $script:RaizXampp 'mysql\bin'
-    $r = Invoke-Nativo -Exe (Join-Path $bin 'mysqladmin.exe') -Argumentos @(
-        '-u', 'root', '-h', '127.0.0.1', '-P', "$($script:PuertoMySql)", 'shutdown')
-    if ($r.Codigo -eq 0) { Write-Ok 'MySQL detenido de forma ordenada (mysqladmin shutdown).' }
-    else { Write-Aviso ('No se pudo detener con mysqladmin: {0}' -f $r.Salida) }
+function Set-NativeAioPersistente {
+    $ini = Join-Path $script:RaizXampp 'mysql\bin\my.ini'
+    $texto = [System.IO.File]::ReadAllText($ini)
+    if ($texto -match '(?im)^\s*innodb_use_native_aio') {
+        Write-Info 'my.ini ya define innodb_use_native_aio; no se modifica.'
+        return
+    }
+    $nl = [Environment]::NewLine
+    $nuevo = [regex]::Replace($texto, '(?im)^\[mysqld\]\r?\n', ('[mysqld]' + $nl + 'innodb_use_native_aio=0' + $nl), 1)
+    if ($nuevo -eq $texto) { Write-Aviso 'No se encontró la sección [mysqld] en my.ini; no se modificó.'; return }
+    [System.IO.File]::WriteAllText($ini, $nuevo, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok 'innodb_use_native_aio=0 agregado a [mysqld] en C:\xampp\mysql\bin\my.ini.'
 }
 
-# ---------------------------------------------------------------------------
-# Diagnóstico complementario de Apache
-# ---------------------------------------------------------------------------
-function Test-ApacheArranque {
+function Start-ApacheServicio {
     $conf = Join-Path $script:RaizXampp 'apache\conf\httpd.conf'
     $puertos = New-Object System.Collections.Generic.List[int]
     if (Test-Path -LiteralPath $conf) {
         Select-String -LiteralPath $conf -Pattern '^\s*Listen\s+(\S+)' | ForEach-Object {
-            $token = $_.Matches[0].Groups[1].Value
-            $numero = ($token -split ':')[-1]
+            $numero = ($_.Matches[0].Groups[1].Value -split ':')[-1]
             if ($numero -match '^\d+$') { $puertos.Add([int]$numero) }
         }
     }
@@ -561,33 +582,55 @@ function Test-ApacheArranque {
     }
     if ($bloqueado) { return 'PUERTO_OCUPADO' }
 
+    Write-Info 'Iniciando Apache (httpd)...'
     $bin = Join-Path $script:RaizXampp 'apache\bin'
     $proceso = Start-Process -FilePath (Join-Path $bin 'httpd.exe') -WorkingDirectory $bin -WindowStyle Hidden -PassThru
     $puertoWeb = [int]$puertos[0]
-    $activo = Wait-Puerto -Puerto $puertoWeb -Segundos 15 -Proceso $proceso
-    $estado = 'FALLO'
-    if ($activo) {
-        try {
-            $resp = Invoke-WebRequest -Uri ('http://localhost:{0}/' -f $puertoWeb) -UseBasicParsing -TimeoutSec 8
-            Write-Ok ('Apache responde HTTP {0} en el puerto {1}.' -f $resp.StatusCode, $puertoWeb)
-            $estado = 'OK'
-        }
-        catch {
-            $codigo = $null
-            if ($_.Exception.PSObject.Properties["Response"] -and $_.Exception.Response) { $codigo = [int]$_.Exception.Response.StatusCode }
-            if ($codigo) { Write-Ok ('Apache responde (HTTP {0}) en el puerto {1}.' -f $codigo, $puertoWeb); $estado = 'OK' }
-            else { Write-Aviso ('Apache escucha pero no respondió a la solicitud HTTP: {0}' -f $_.Exception.Message) }
-        }
-    }
-    else {
+    if (-not (Wait-Puerto -Puerto $puertoWeb -Segundos 20 -Proceso $proceso)) {
         Write-Aviso 'httpd.exe no quedó escuchando.'
         Show-UltimasLineas -Archivo (Join-Path $script:RaizXampp 'apache\logs\error.log')
+        return 'FALLO'
     }
+    try {
+        $resp = Invoke-WebRequest -Uri ('http://localhost:{0}/' -f $puertoWeb) -UseBasicParsing -TimeoutSec 8
+        Write-Ok ('Apache iniciado; responde HTTP {0} en el puerto {1}.' -f $resp.StatusCode, $puertoWeb)
+    }
+    catch {
+        $codigo = $null
+        if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) { $codigo = [int]$_.Exception.Response.StatusCode }
+        if ($codigo) { Write-Ok ('Apache iniciado; responde HTTP {0} en el puerto {1}.' -f $codigo, $puertoWeb) }
+        else { Write-Aviso ('Apache escucha pero no respondió a la solicitud HTTP: {0}' -f $_.Exception.Message); return 'SIN_RESPUESTA' }
+    }
+    return 'OK'
+}
 
-    # Apache solo se usó para la prueba; se libera para que use el panel de XAMPP.
+function Test-AccesoMySql {
+    # Equivale a 'mysql -u root -p -h localhost -P 3307 -D mysql' con contraseña vacía
+    # (sin -p para no depender de una entrada interactiva).
+    $bin = Join-Path $script:RaizXampp 'mysql\bin'
+    $sql = 'SELECT CURRENT_USER() AS usuario, DATABASE() AS base_datos, VERSION() AS version; SHOW DATABASES;'
+    $resultado = Invoke-Nativo -Exe (Join-Path $bin 'mysql.exe') -Argumentos @(
+        '-u', 'root', '-h', 'localhost', '-P', "$($script:PuertoMySql)", '-D', 'mysql', '--connect-timeout=10', '-e', $sql)
+    if ($resultado.Codigo -ne 0) {
+        throw ('El cliente mysql devolvió el código {0}: {1}' -f $resultado.Codigo, $resultado.Salida)
+    }
+    Write-Ok 'Acceso a MySQL verificado (usuario root, sin contraseña, base de datos mysql).'
+    $resultado.Salida -split "`r?`n" | ForEach-Object { Write-Host ('      ' + $_) -ForegroundColor DarkGray }
+}
+
+function Stop-MySqlLimpio {
+    $bin = Join-Path $script:RaizXampp 'mysql\bin'
+    $r = Invoke-Nativo -Exe (Join-Path $bin 'mysqladmin.exe') -Argumentos @(
+        '-u', 'root', '-h', '127.0.0.1', '-P', "$($script:PuertoMySql)", 'shutdown')
+    if ($r.Codigo -eq 0) { Write-Ok 'MySQL detenido de forma ordenada (mysqladmin shutdown).' }
+    else { Write-Aviso ('No se pudo detener con mysqladmin: {0}' -f $r.Salida) }
+}
+
+function Stop-ServiciosVerificados {
+    if ($script:MySqlIniciadoPorScript) { Stop-MySqlLimpio }
     Get-ProcesosXampp | Where-Object { $_.Name -eq 'httpd.exe' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    return $estado
+    Write-Ok 'Apache detenido.'
 }
 
 # ===========================================================================
@@ -678,18 +721,28 @@ try {
     Add-Resumen '5.6' 'OK' 'PATH de usuario actualizado (abrir una terminal nueva)'
 
     # --- 5.7 -----------------------------------------------------------------
-    Write-Paso '5.7' 'Verificación de acceso a MySQL'
-    Test-AccesoMySql
-    Add-Resumen '5.7' 'OK' 'mysql -u root -h localhost -P 3307 -D mysql operativo'
+    Write-Paso '5.7' 'Inicio de MySQL y Apache, y verificación de acceso a MySQL'
+    Start-MySqlServicio
+    if ($script:MySqlAio0) {
+        if ($PersistNativeAio) { Set-NativeAioPersistente }
+        else { Write-Aviso 'MySQL solo inicia con --innodb-use-native-aio=0. Para que también inicie desde el panel de XAMPP, repita con -PersistNativeAio.' }
+        Add-Resumen '5.7a' 'AVISO' 'MySQL inició únicamente con --innodb-use-native-aio=0'
+    }
+    Add-Resumen '5.7a' 'OK' 'MySQL iniciado'
 
     if (-not $SkipApache) {
-        Write-Paso '+' 'Diagnóstico complementario de Apache (sin modificar archivos)'
-        $estadoApache = Test-ApacheArranque
-        if ($estadoApache -eq 'OK') { Add-Resumen '+' 'OK' 'Apache inicia y responde' }
-        else { Add-Resumen '+' 'AVISO' ('Apache: {0}' -f $estadoApache) }
+        $estadoApache = Start-ApacheServicio
+        if ($estadoApache -eq 'OK') { Add-Resumen '5.7b' 'OK' 'Apache iniciado y respondiendo' }
+        else { Add-Resumen '5.7b' 'AVISO' ('Apache: {0}' -f $estadoApache) }
     }
 
-    if ($StopMySql -and $script:MySqlIniciadoPorScript) { Stop-MySqlLimpio }
+    Test-AccesoMySql
+    Add-Resumen '5.7c' 'OK' 'mysql -u root -h localhost -P 3307 -D mysql operativo'
+
+    if ($StopServices) {
+        Stop-ServiciosVerificados
+        Add-Resumen '5.7d' 'OK' 'Servicios detenidos (-StopServices)'
+    }
 }
 catch {
     $codigoSalida = 1
@@ -702,12 +755,20 @@ finally {
     Write-Host '=== Resumen ===' -ForegroundColor White
     ($script:Resumen | Format-Table -AutoSize -Wrap | Out-String).TrimEnd() | Write-Host
     if ($script:DirRespaldo) { Write-Host ('Respaldo de lo reemplazado: {0}' -f $script:DirRespaldo) }
-    if ($codigoSalida -eq 0) {
+    if ($codigoSalida -eq 0 -and ($NoShell -or $StopServices)) {
         Write-Host ''
         Write-Host 'Para la verificación manual abra una terminal NUEVA y ejecute:' -ForegroundColor White
         Write-Host '   mysql -u root -p -h localhost -P 3307 -D mysql' -ForegroundColor Green
         Write-Host '   (cuando solicite la contraseña, presione Enter: no tiene)' -ForegroundColor Gray
     }
     if ($transcripcion) { try { Stop-Transcript | Out-Null } catch { } }
+}
+
+if ($codigoSalida -eq 0 -and -not $NoShell -and -not $StopServices) {
+    Write-Host ''
+    Write-Host 'Abriendo el cliente con el comando indicado (MySQL y Apache siguen en ejecución):' -ForegroundColor White
+    Write-Host '   mysql -u root -p -h localhost -P 3307 -D mysql' -ForegroundColor Green
+    Write-Host '   Cuando solicite la contraseña, presione Enter (no tiene). Escriba exit para salir.' -ForegroundColor Gray
+    & (Join-Path $script:RaizXampp 'mysql\bin\mysql.exe') -u root -p -h localhost -P $script:PuertoMySql -D mysql
 }
 exit $codigoSalida

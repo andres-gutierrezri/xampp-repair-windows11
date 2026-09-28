@@ -39,7 +39,7 @@ Scripts en **PowerShell** y **CMD (Batch)** para reparar XAMPP cuando **Apache**
 | 5.4 | Reemplaza `C:\xampp\mysql\bin\my.ini`. |
 | 5.5 | Reemplaza `C:\xampp\phpMyAdmin\config.inc.php`. |
 | 5.6 | Agrega `C:\xampp\mysql\bin` al `PATH` **del usuario** (ver [docs/img](docs/img)). |
-| 5.7 | Inicia MySQL y verifica `mysql -u root -h localhost -P 3307 -D mysql` sin contraseña. |
+| 5.7 | Inicia **MySQL y Apache** (quedan en ejecución), verifica el acceso a MySQL sin contraseña y abre el cliente con `mysql -u root -p -h localhost -P 3307 -D mysql`. |
 | + | Diagnóstico complementario de Apache (puertos y respuesta HTTP), sin modificar archivos. |
 
 Lo reemplazado **no se destruye**: se traslada a `%LOCALAPPDATA%\xampp-repair-backup\<fecha>` (fuera de `C:\xampp`). Use `-NoBackup` (PowerShell) o `/NOBACKUP` (CMD) para eliminarlo definitivamente.
@@ -127,10 +127,12 @@ Opciones:
 | `-NoBackup` | `/NOBACKUP` | No conserva respaldo de lo reemplazado |
 | `-AllowDuplicates` | `/ALLOWDUP` | Continúa aunque existan otras instalaciones de XAMPP |
 | `-SkipApache` | `/SKIPAPACHE` | Omite la prueba de Apache |
-| `-StopMySql` | `/STOPMYSQL` | Detiene MySQL al finalizar |
-| `-NoNativeAio` | — | Diagnóstico: inicia `mysqld` con `--innodb-use-native-aio=0` sin tocar `my.ini` |
+| `-StopServices` | `/STOPSERVICES` | Detiene MySQL y Apache al finalizar (y no abre el cliente) |
+| `-NoNativeAio` | `/NOAIO` | Inicia `mysqld` con `--innodb-use-native-aio=0` sin tocar `my.ini` (PowerShell lo reintenta solo si el arranque normal falla) |
+| `-PersistNativeAio` | `/PERSISTAIO` | Si solo inicia con esa opción, agrega `innodb_use_native_aio=0` a `[mysqld]` en `my.ini` |
+| `-NoShell` | `/NOSHELL` | No abre al final el cliente interactivo |
 
-Verificación manual final (**en una terminal nueva**, para que lea el `PATH` actualizado). Al pedir la contraseña, presione **Enter**:
+Al finalizar sin errores, el script abre el cliente con el comando siguiente (MySQL y Apache siguen en ejecución). Al pedir la contraseña, presione **Enter** y escriba `exit` para salir. Con `-NoShell` puede ejecutarlo usted después, **en una terminal nueva** para que lea el `PATH` actualizado:
 
 ```cmd
 mysql -u root -p -h localhost -P 3307 -D mysql
