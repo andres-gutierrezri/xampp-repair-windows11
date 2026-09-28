@@ -1,0 +1,43 @@
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- IDE / editores ---
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*~
+
+# --- Entornos virtuales (por si se añaden utilidades en Python) ---
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+
+# --- Node (por si se añaden utilidades en JavaScript) ---
+node_modules/
+
+# --- Secretos y configuración local ---
+.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# --- Bases de datos locales y volcados ---
+*.sqlite
+*.sqlite3
+*.db
+*.sql.bak
+
+# --- Bitácoras, respaldos y temporales generados por los scripts ---
+*.log
+*.tmp
+*.bak
+xampp-repair-backup/
+xampp-repair-logs/
+dist/

@@ -1,0 +1,11 @@
+# Normalización de finales de línea: los scripts de Windows deben conservar CRLF.
+* text=auto
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.md   text eol=lf
+static/my.ini text eol=crlf
+static/config.inc.php text eol=lf
+*.zip  binary
+*.png  binary

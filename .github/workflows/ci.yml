@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  validar:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analizar scripts con PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $r = Invoke-ScriptAnalyzer -Path .\src -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          $r | Format-Table -AutoSize
+          if ($r | Where-Object Severity -eq 'Error') { exit 1 }
+
+      - name: Pruebas estáticas del proyecto
+        shell: pwsh
+        run: ./tests/Test-Project.ps1

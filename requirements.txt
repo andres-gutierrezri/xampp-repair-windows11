@@ -1,0 +1,8 @@
+# Este proyecto NO usa Python ni pip; el archivo se conserva por uniformidad de estructura.
+# Requisitos reales (no instalables con pip):
+#   - Windows 11 (cuenta local estándar, sin administrador)
+#   - Windows PowerShell 5.1 (incluido en Windows 11) o PowerShell 7+
+#   - tar.exe y robocopy.exe (incluidos en Windows 10/11) para la versión CMD
+#   - XAMPP instalado en C:\xampp
+# Herramientas opcionales de desarrollo (PowerShell Gallery):
+#   Install-Module PSScriptAnalyzer -Scope CurrentUser
