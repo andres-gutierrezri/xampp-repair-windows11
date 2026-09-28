@@ -11,7 +11,9 @@
 param()
 
 Set-StrictMode -Version 2.0
-$raiz = Split-Path -Parent $PSScriptRoot
+$dirPruebas = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($dirPruebas)) { $dirPruebas = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$raiz = Split-Path -Parent $dirPruebas
 $script:Fallos = 0
 $script:Total  = 0
 

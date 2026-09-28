@@ -49,7 +49,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ResourcesPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'static'),
+    [string]$ResourcesPath,
     [switch]$NoBackup,
     [switch]$AllowDuplicates,
     [switch]$SkipApache,
@@ -58,6 +58,28 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Resolución robusta de rutas del proyecto. $PSScriptRoot puede estar vacío si el
+# script no se invoca con -File (p. ej. "Ejecutar con PowerShell" o pegado en consola).
+# ---------------------------------------------------------------------------
+$script:DirScript = $null
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $script:DirScript = $PSScriptRoot }
+elseif ($MyInvocation.MyCommand.Path) { $script:DirScript = Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { $script:DirScript = (Get-Location).Path }
+
+$script:DirProyecto = Split-Path -Parent $script:DirScript
+if ([string]::IsNullOrWhiteSpace($ResourcesPath)) {
+    $ResourcesPath = Join-Path $script:DirProyecto 'static'
+    # Si se ejecutó desde la raíz del proyecto en lugar de src\, se ajusta.
+    if (-not (Test-Path -LiteralPath (Join-Path $ResourcesPath 'data.zip'))) {
+        $alterna = Join-Path (Get-Location).Path 'static'
+        if (Test-Path -LiteralPath (Join-Path $alterna 'data.zip')) {
+            $ResourcesPath = $alterna
+            $script:DirProyecto = (Get-Location).Path
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Constantes y estado global
@@ -280,7 +302,7 @@ function Enable-EjecucionScripts {
 
     # Elimina la marca de descarga (Zone.Identifier) de los archivos del proyecto.
     try {
-        $raizProyecto = Split-Path -Parent $PSScriptRoot
+        $raizProyecto = $script:DirProyecto
         Get-ChildItem -LiteralPath $raizProyecto -Recurse -File -ErrorAction SilentlyContinue |
             Unblock-File -ErrorAction SilentlyContinue
         Write-Ok 'Archivos del proyecto desbloqueados (Unblock-File).'
